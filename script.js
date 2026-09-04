@@ -95,9 +95,12 @@ function buildDeck() {
 }
 
 /* ---------- State ---------- */
-let state = null;
+let state = null;          // round-level state (deck, hands, current player...)
+let match = null;          // cross-round: players, scores, round number, target, history
 let chosenPlayerCount = 4;
 let playerTypes = ['human', 'human', 'human', 'human'];
+let chosenTargetScore = 500;
+const TARGET_SCORE = 500;
 
 /* ---------- DOM refs ---------- */
 const $ = (id) => document.getElementById(id);
@@ -125,6 +128,9 @@ const winnerSub = $('winnerSub');
 const aiThinking = $('aiThinking');
 const aiThinkingText = $('aiThinkingText');
 const soundToggle = $('soundToggle');
+const roundCountEl = $('roundCount');
+const scoreboardEl = $('scoreboard');
+const overIcon = $('overIcon');
 
 /* ============================================================
    SOUND (procedural Web Audio — no external files)
@@ -198,11 +204,37 @@ function initSetup() {
   });
   renderNameInputs();
 
+  // winning score presets + custom input
+  document.querySelectorAll('.target-btn').forEach((b) => {
+    b.addEventListener('click', () => {
+      Sound.play('click');
+      document.querySelectorAll('.target-btn').forEach((x) => x.classList.remove('is-active'));
+      b.classList.add('is-active');
+      chosenTargetScore = parseInt(b.dataset.target, 10);
+      $('targetInput').value = chosenTargetScore;
+    });
+  });
+  $('targetInput').addEventListener('input', () => {
+    const v = parseInt($('targetInput').value, 10);
+    if (Number.isFinite(v) && v >= 50) {
+      chosenTargetScore = v;
+      document.querySelectorAll('.target-btn').forEach((x) => x.classList.remove('is-active'));
+    }
+  });
+
   $('startBtn').addEventListener('click', () => {
     Sound.init(); Sound.resume(); Sound.play('click');
     const inputs = document.querySelectorAll('.name-input');
     const names = Array.from(inputs).map((inp, i) => (inp.value.trim() || 'Player ' + (i + 1)));
-    startGame(names, playerTypes.slice());
+    startMatch(names, playerTypes.slice(), chosenTargetScore);
+  });
+
+  // "Clear saved game" — discard any persisted match so a fresh one starts on next load.
+  $('clearSaveBtn').addEventListener('click', () => {
+    Sound.play('click');
+    clearSave();
+    match = null; state = null;
+    $('saveRow').hidden = true;
   });
 
   $('revealBtn').addEventListener('click', () => { Sound.play('click'); revealHand(); });
@@ -212,12 +244,11 @@ function initSetup() {
   unoBtn.addEventListener('click', () => { Sound.play('click'); callUno(); });
   $('restartBtn').addEventListener('click', () => {
     Sound.play('click');
-    const names = state.players.map((p) => p.name);
-    const types = state.players.map((p) => (p.isAI ? 'ai' : 'human'));
-    startGame(names, types);
+    handleOverPrimary();
   });
   $('newSetupBtn').addEventListener('click', () => {
     Sound.play('click');
+    clearSave();
     overOverlay.classList.add('hidden');
     gameScreen.classList.add('hidden');
     setupScreen.classList.remove('hidden');
@@ -262,11 +293,24 @@ function renderNameInputs() {
 }
 
 /* ============================================================
-   START GAME
+   START MATCH / ROUND
    ============================================================ */
-function startGame(names, types) {
+function startMatch(names, types, target) {
+  match = {
+    names: names.slice(),
+    types: types.slice(),
+    players: names.map((n, i) => ({ name: n, isAI: !!(types && types[i] === 'ai'), score: 0 })),
+    round: 1,
+    target: target || TARGET_SCORE,
+    history: [],
+  };
+  startRound();
+}
+
+function startRound() {
   const deck = buildDeck();
-  const players = names.map((n, i) => ({ name: n, hand: [], calledUno: false, isAI: (types && types[i] === 'ai') }));
+  // round players carry their running score for rendering
+  const players = match.players.map((p) => ({ name: p.name, isAI: p.isAI, score: p.score, hand: [], calledUno: false }));
 
   // deal 7 each
   for (let r = 0; r < 7; r++) {
@@ -288,9 +332,12 @@ function startGame(names, types) {
     start = { id: 'start', light: { color: 'red', type: T.number, value: 1 }, dark: { color: 'pink', type: T.number, value: 1 } };
   }
 
+  // rotate who starts each round (player to the dealer's left begins)
+  const startPlayer = (match.round - 1) % players.length;
+
   state = {
     players,
-    currentPlayer: 0,
+    currentPlayer: startPlayer,
     direction: 1,
     side: 'light',
     drawPile: deck,
@@ -309,7 +356,7 @@ function startGame(names, types) {
   overOverlay.classList.add('hidden');
   logEl.innerHTML = '';
   const aiCount = players.filter((p) => p.isAI).length;
-  addLog('Game started — light side in play.' + (aiCount ? ` ${aiCount} AI opponent${aiCount > 1 ? 's' : ''}.` : ''));
+  addLog(`Round ${match.round} — first to ${match.target} wins. Light side in play.` + (aiCount ? ` ${aiCount} AI opponent${aiCount > 1 ? 's' : ''}.` : ''));
   beginTurn();
 }
 
@@ -532,8 +579,17 @@ function afterCardPlayed(face) {
   state.justPlayed = face;
   const p = state.players[state.currentPlayer];
 
-  // win?
-  if (p.hand.length === 0) { endGame(p); return; }
+  // round won? (player emptied their hand)
+  if (p.hand.length === 0) {
+    // Official rule: if the last card is a draw card (Draw One, Draw Five,
+    // Wild Draw Two, Wild Draw Color), the next player still draws the
+    // penalty BEFORE the round ends and scores are tallied.
+    if (isDrawCard(face.type)) {
+      applyLastCardDrawEffect(face);
+    }
+    endRound(p);
+    return;
+  }
 
   // uno?
   if (p.hand.length === 1 && !p.calledUno) {
@@ -543,6 +599,41 @@ function afterCardPlayed(face) {
   }
 
   endTurn();
+}
+
+/* ---------- Scoring helpers ---------- */
+const DRAW_CARD_TYPES = [T.drawOne, T.drawFive, T.wildDrawTwo, T.wildDrawColor];
+function isDrawCard(t) { return DRAW_CARD_TYPES.includes(t); }
+
+// Points a card is worth at round end, counted on the side the round ended on.
+function cardValue(card) {
+  const face = card[state.side];
+  switch (face.type) {
+    case T.number: return face.value;          // 1-9 face value
+    case T.drawOne: return 10;
+    case T.drawFive: case T.reverse: case T.skip: case T.flip: return 20;
+    case T.skipEveryone: return 30;
+    case T.wild: return 40;
+    case T.wildDrawTwo: return 50;
+    case T.wildDrawColor: return 60;
+    default: return 0;
+  }
+}
+
+// Apply the penalty of a winning draw-card to the next player (no skip — round is over).
+function applyLastCardDrawEffect(face) {
+  const victimIdx = adv(1);
+  const victim = state.players[victimIdx];
+  switch (face.type) {
+    case T.drawOne:
+      drawFor(victimIdx, 1); addLog(`${victim.name} draws 1 (last-card penalty).`); break;
+    case T.drawFive:
+      drawFor(victimIdx, 5); addLog(`${victim.name} draws 5 (last-card penalty).`); break;
+    case T.wildDrawTwo:
+      drawFor(victimIdx, 2); addLog(`${victim.name} draws 2 (last-card penalty).`); break;
+    case T.wildDrawColor:
+      drawUntilColor(victimIdx, state.chosenColor); addLog(`${victim.name} drew until ${state.chosenColor} (last-card penalty).`); break;
+  }
 }
 
 /* ---------- Draw voluntarily ---------- */
@@ -646,16 +737,106 @@ function flipSide() {
 }
 
 /* ============================================================
-   GAME OVER
+   ROUND END / MATCH END
    ============================================================ */
-function endGame(winner) {
+function endRound(winner) {
   state.phase = 'over';
-  winnerTitle.textContent = `${winner.name} wins!`;
-  winnerSub.textContent = `${winner.name} emptied their hand on the ${state.side.toUpperCase()} side.`;
-  addLog(`★ ${winner.name} wins the game!`);
-  Sound.play('win');
-  overOverlay.classList.remove('hidden');
+  const endingSide = state.side;
+  const winnerIdx = state.currentPlayer;
+
+  // Standard scoring: winner banks the total of all cards left in opponents' hands,
+  // counted on the side the round ended on.
+  let points = 0;
+  state.players.forEach((pl, i) => {
+    if (i === winnerIdx) return;
+    pl.hand.forEach((c) => { points += cardValue(c); });
+  });
+
+  const mp = match.players[winnerIdx];
+  mp.score += points;
+  winner.score = mp.score; // keep round player in sync for rendering
+
+  // record this round in the match history
+  match.history.push({
+    round: match.round,
+    winnerIdx,
+    points,
+    totals: match.players.map((p) => p.score),
+  });
+
+  const matchOver = mp.score >= match.target;
+  addLog(`★ Round ${match.round}: ${winner.name} emptied their hand and scored ${points} point${points === 1 ? '' : 's'}. Total: ${mp.score}/${match.target}.`);
+  Sound.play(matchOver ? 'win' : 'play');
+  showRoundEndOverlay(winner, points, endingSide, matchOver);
   render();
+}
+
+function showRoundEndOverlay(winner, points, endingSide, matchOver) {
+  overIcon.textContent = matchOver ? '★' : '✓';
+  winnerTitle.textContent = matchOver ? `${winner.name} wins the game!` : `${winner.name} wins round ${match.round}!`;
+  winnerSub.textContent = matchOver
+    ? `Reached ${winner.score} points on the ${endingSide.toUpperCase()} side. First to ${match.target} wins!`
+    : `Scored ${points} point${points === 1 ? '' : 's'} from opponents' hands on the ${endingSide.toUpperCase()} side.`;
+
+  // Scoreboard: Player | This round | Total
+  scoreboardEl.innerHTML = '';
+  const tbl = document.createElement('table');
+  tbl.className = 'score-table';
+  tbl.innerHTML = `<thead><tr><th>Player</th><th>This round</th><th>Total</th></tr></thead>`;
+  const tbody = document.createElement('tbody');
+  match.players.forEach((mp, i) => {
+    const earned = (i === state.currentPlayer) ? points : 0;
+    const tr = document.createElement('tr');
+    if (i === state.currentPlayer) tr.classList.add('is-winner');
+    tr.innerHTML = `<td class="sr-name">${mp.name}${mp.isAI ? ' <span class=\"sr-ai\">AI</span>' : ''}</td>`
+      + `<td class="sr-earned ${earned > 0 ? 'plus' : ''}">${earned > 0 ? '+' + earned : '0'}</td>`
+      + `<td class="sr-total">${mp.score}</td>`;
+    tbody.appendChild(tr);
+  });
+  tbl.appendChild(tbody);
+  scoreboardEl.appendChild(tbl);
+
+  $('restartBtn').textContent = matchOver ? 'Play again' : 'Next round';
+  renderHistory();
+  overOverlay.classList.remove('hidden');
+}
+
+// Round-by-round match history table (one row per round, columns per player).
+function renderHistory() {
+  const panel = $('historyPanel');
+  if (!match.history.length) { panel.innerHTML = ''; return; }
+  let html = '<div class="history-title">Match history</div><div class="history-scroll"><table class="hist-table"><thead><tr><th>Rd</th>';
+  match.players.forEach((p) => { html += `<th>${escapeHTML(p.name)}</th>`; });
+  html += '</tr></thead><tbody>';
+  match.history.forEach((h) => {
+    html += `<tr><td class="hist-rd">${h.round}</td>`;
+    match.players.forEach((_, i) => {
+      const earned = (i === h.winnerIdx) ? h.points : 0;
+      html += `<td class="${earned > 0 ? 'plus' : ''}">${earned > 0 ? '+' + earned : '·'}</td>`;
+    });
+    html += '</tr>';
+  });
+  // running totals row
+  html += '<tr class="hist-totals"><td>Σ</td>';
+  match.players.forEach((p) => { html += `<td>${p.score}</td>`; });
+  html += '</tr></tbody></table></div>';
+  panel.innerHTML = html;
+}
+
+function escapeHTML(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// Primary button on the round-end overlay: advance to next round, or restart the match.
+function handleOverPrimary() {
+  const champion = match.players.find((p) => p.score >= match.target);
+  if (champion) {
+    // match over — restart with the same players, types & target
+    startMatch(match.names, match.types, match.target);
+  } else {
+    match.round++;
+    startRound();
+  }
 }
 
 /* ============================================================
@@ -663,6 +844,7 @@ function endGame(winner) {
    ============================================================ */
 function render() {
   // top bar
+  roundCountEl.textContent = 'Round ' + match.round;
   sideIndicator.textContent = state.side.toUpperCase();
   sideIndicator.className = 'side-indicator ' + state.side;
   directionEl.textContent = state.direction === 1 ? '↻' : '↺';
@@ -673,6 +855,7 @@ function render() {
   renderDrawPile();
   renderHand();
   renderActions();
+  saveState();
 }
 
 function renderPlayers() {
@@ -691,7 +874,10 @@ function renderPlayers() {
     const ptype = document.createElement('span');
     ptype.className = 'ptype ' + (p.isAI ? 'ai' : 'human');
     ptype.textContent = p.isAI ? 'AI' : 'Human';
-    chip.append(back, name, ptype, count);
+    const score = document.createElement('span');
+    score.className = 'pscore';
+    score.textContent = p.score + 'pt';
+    chip.append(back, name, ptype, count, score);
     playersBar.appendChild(chip);
   });
 }
@@ -716,8 +902,8 @@ function renderDrawPile() {
 
 function renderHand() {
   const p = state.players[state.currentPlayer];
-  // AI hands are never shown to humans
-  if (p.isAI) {
+  // AI hands are never shown; once a round is over, clear the hand area
+  if (p.isAI && state.phase !== 'over') {
     handEl.innerHTML = '';
     aiThinkingText.textContent = `${p.name} (AI) is thinking…`;
     aiThinking.classList.remove('hidden');
@@ -725,6 +911,7 @@ function renderHand() {
   }
   aiThinking.classList.add('hidden');
   handEl.innerHTML = '';
+  if (state.phase === 'over') return;
   // sort: playable first
   const cards = [...p.hand];
   const playable = (c) => canPlayThisPhase(c);
@@ -860,12 +1047,77 @@ function wildLabel(t) {
   }
 }
 
+/* ---------- Persistence (localStorage) ---------- */
+// Saves the full match + round state so a page reload resumes exactly where you left off,
+// including the running scoreboard and match history.
+const STORAGE_KEY = 'uno-flip-save-v1';
+
+function saveState() {
+  if (!match || !state) return;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ match, state }));
+  } catch (e) { /* storage disabled / quota — ignore */ }
+}
+
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (!data || !data.match || !data.state) return null;
+    return data;
+  } catch (e) { return null; }
+}
+
+// Returns true if a save key exists at all (even if not parseable/resumable).
+function loadStateRaw() {
+  try { return !!localStorage.getItem(STORAGE_KEY); } catch (e) { return false; }
+}
+
+function clearSave() {
+  try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+}
+
+// Rebuilds the UI from a restored match/state. Mirrors the render paths used live.
+function resumeGame() {
+  setupScreen.classList.add('hidden');
+  gameScreen.classList.remove('hidden');
+
+  // Replay the log from stored entries (each {p, m}).
+  logEl.innerHTML = '';
+  (state.log || []).forEach((entry) => {
+    const li = document.createElement('li');
+    li.innerHTML = `<span class="turn">${entry.p}</span> ${entry.m}`;
+    logEl.prepend(li);
+  });
+
+  render(); // base render (top bar, discard pile, hand)
+
+  if (state.phase === 'over') {
+    const widx = state.currentPlayer;
+    const last = match.history[match.history.length - 1];
+    const points = last ? last.points : 0;
+    showRoundEndOverlay(state.players[widx], points, state.side, match.players[widx].score >= match.target);
+  } else if (state.pendingWildCard) {
+    // a human had just played a wild and the color picker was open
+    openColorChooser(state.pendingWildCard[state.side].type);
+  } else if (state.phase === 'pass') {
+    showPassOverlay();
+  } else if (state.phase === 'ai') {
+    // AI was mid-turn when the tab closed — reschedule it
+    aiThinking.classList.remove('hidden');
+    aiThinkingText.textContent = `${state.players[state.currentPlayer].name} (AI) is thinking…`;
+    setTimeout(aiTurn, 900);
+  }
+}
+
 /* ---------- Log ---------- */
 function addLog(msg) {
   const li = document.createElement('li');
-  li.innerHTML = `<span class="turn">${state ? state.players[state.currentPlayer].name : ''}</span> ${msg}`;
+  const p = state ? state.players[state.currentPlayer].name : '';
+  li.innerHTML = `<span class="turn">${p}</span> ${msg}`;
   logEl.prepend(li);
-  state && state.log.push(msg);
+  if (state) state.log.push({ p, m: msg });
 }
 
 /* ============================================================
@@ -889,3 +1141,13 @@ function addLog(msg) {
    BOOT
    ============================================================ */
 initSetup();
+// Resume an in-progress match if one was saved (survives page reloads).
+// Otherwise, if a stale save exists but wasn't resumable, offer to clear it.
+const _savedGame = loadState();
+if (_savedGame) {
+  match = _savedGame.match;
+  state = _savedGame.state;
+  resumeGame();
+} else if (loadStateRaw()) {
+  $('saveRow').hidden = false;
+}

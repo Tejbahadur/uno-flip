@@ -16,6 +16,7 @@
       <span class="brand-uno">UNO</span><span class="brand-flip">Flip</span>
     </div>
     <div class="status" id="statusBar">
+      <span class="round-count" id="roundCount">Round 1</span>
       <span class="side-indicator light" id="sideIndicator">LIGHT</span>
       <span class="dir" id="direction" title="Direction of play">↻</span>
       <span class="draw-count" id="drawCount">Deck 0</span>
@@ -52,18 +53,37 @@
           <div class="name-list" id="nameList"></div>
         </div>
 
+        <div class="setup-field">
+          <label for="targetInput">Winning score</label>
+          <div class="target-row">
+            <button type="button" class="target-btn" data-target="100">100</button>
+            <button type="button" class="target-btn" data-target="200">200</button>
+            <button type="button" class="target-btn" data-target="300">300</button>
+            <button type="button" class="target-btn is-active" data-target="500">500</button>
+            <input type="number" class="target-input" id="targetInput" min="50" max="9999" step="50" value="500" title="Custom winning score" inputmode="numeric" />
+          </div>
+          <p class="hint">First player to reach this score wins the match.</p>
+        </div>
+
         <button class="btn-primary" id="startBtn">Start Game</button>
+
+        <div class="save-row" id="saveRow" hidden>
+          <button class="btn-secondary" id="clearSaveBtn" type="button">Clear saved game</button>
+          <span class="save-hint">A match in progress is saved on this device — clear it to start fresh.</span>
+        </div>
 
         <details class="rules">
           <summary>How to play</summary>
           <div class="rules-body">
-            <p><strong>Goal:</strong> Be the first to empty your hand.</p>
+            <p><strong>Goal:</strong> Empty your hand to win the round and bank points. First to <strong>500 points</strong> wins the game.</p>
+            <p><strong>Scoring:</strong> The round winner scores the total of all cards left in opponents' hands, counted on the side the round ended on. Numbers = face value, Draw One = 10, Draw Five / Reverse / Skip / Flip = 20, Skip Everyone = 30, Wild = 40, Wild Draw Two = 50, Wild Draw Color = 60.</p>
             <p><strong>Play:</strong> Match the top discard by colour or by symbol/number. Wilds may be played anytime.</p>
             <p><strong>Light side</strong> (white border): Draw One, Skip, Reverse, Flip, Wild, Wild Draw Two.</p>
             <p><strong>Dark side</strong> (black border): Draw Five, Skip Everyone, Reverse, Flip, Wild, Wild Draw Color.</p>
             <p><strong>Flip:</strong> A Flip card turns every card over — the other side is now in play, including a new active colour.</p>
             <p><strong>Wild Draw Color:</strong> Name a colour; the next player keeps drawing until that colour appears, then loses their turn.</p>
             <p><strong>UNO!</strong> When you reach one card, press the UNO button before ending your turn, or draw a 2-card penalty.</p>
+            <p><strong>Last card is a draw card?</strong> The next player still draws the penalty before the round ends.</p>
           </div>
         </details>
       </div>
@@ -123,11 +143,13 @@
     </div>
 
     <div class="overlay hidden" id="overOverlay">
-      <div class="overlay-card">
-        <div class="overlay-icon">★</div>
+      <div class="overlay-card overlay-card-wide">
+        <div class="overlay-icon" id="overIcon">★</div>
         <h2 id="winnerTitle">Winner!</h2>
         <p class="overlay-sub" id="winnerSub"></p>
-        <button class="btn-primary" id="restartBtn">Play again</button>
+        <div class="scoreboard" id="scoreboard"></div>
+        <div class="history-panel" id="historyPanel"></div>
+        <button class="btn-primary" id="restartBtn">Next round</button>
         <button class="btn-secondary" id="newSetupBtn">New setup</button>
       </div>
     </div>
