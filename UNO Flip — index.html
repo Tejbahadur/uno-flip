@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>UNO Flip — Multiplayer Card Game</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@500,700,800&f[]=satoshi@400,500,700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- ============ TOP BAR ============ -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-uno">UNO</span><span class="brand-flip">Flip</span>
+    </div>
+    <div class="status" id="statusBar">
+      <span class="side-indicator light" id="sideIndicator">LIGHT</span>
+      <span class="dir" id="direction" title="Direction of play">↻</span>
+      <span class="draw-count" id="drawCount">Deck 0</span>
+    </div>
+    <button class="topbar-btn sound-toggle" id="soundToggle" aria-label="Toggle sound" aria-pressed="true">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M19 5a10 10 0 0 1 0 14M16 8a5 5 0 0 1 0 8" class="sound-on"/></svg>
+    </button>
+    <button class="topbar-btn theme-toggle" data-theme-toggle aria-label="Toggle theme">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+    </button>
+  </header>
+
+  <main>
+    <!-- ============ SETUP SCREEN ============ -->
+    <section id="setupScreen" class="screen">
+      <div class="setup-card">
+        <h1 class="setup-title">UNO <span class="brand-flip">Flip</span></h1>
+        <p class="setup-sub">Light meets dark. Play the Flip card to turn the whole table around.</p>
+
+        <div class="setup-field">
+          <label for="playerCount">Number of players</label>
+          <div class="count-row" id="countRow">
+            <button type="button" class="count-btn" data-count="2">2</button>
+            <button type="button" class="count-btn" data-count="3">3</button>
+            <button type="button" class="count-btn is-active" data-count="4">4</button>
+            <button type="button" class="count-btn" data-count="5">5</button>
+            <button type="button" class="count-btn" data-count="6">6</button>
+            <button type="button" class="count-btn" data-count="7">7</button>
+          </div>
+        </div>
+
+        <div class="setup-field">
+          <label>Players <span class="hint">tap a chip to switch between Human and AI</span></label>
+          <div class="name-list" id="nameList"></div>
+        </div>
+
+        <button class="btn-primary" id="startBtn">Start Game</button>
+
+        <details class="rules">
+          <summary>How to play</summary>
+          <div class="rules-body">
+            <p><strong>Goal:</strong> Be the first to empty your hand.</p>
+            <p><strong>Play:</strong> Match the top discard by colour or by symbol/number. Wilds may be played anytime.</p>
+            <p><strong>Light side</strong> (white border): Draw One, Skip, Reverse, Flip, Wild, Wild Draw Two.</p>
+            <p><strong>Dark side</strong> (black border): Draw Five, Skip Everyone, Reverse, Flip, Wild, Wild Draw Color.</p>
+            <p><strong>Flip:</strong> A Flip card turns every card over — the other side is now in play, including a new active colour.</p>
+            <p><strong>Wild Draw Color:</strong> Name a colour; the next player keeps drawing until that colour appears, then loses their turn.</p>
+            <p><strong>UNO!</strong> When you reach one card, press the UNO button before ending your turn, or draw a 2-card penalty.</p>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <!-- ============ GAME SCREEN ============ -->
+    <section id="gameScreen" class="screen hidden">
+      <div class="players-bar" id="playersBar"></div>
+
+      <div class="table" id="table">
+        <div class="pile-slot">
+          <div class="pile draw-pile" id="drawPile" title="Draw a card"></div>
+          <span class="pile-label">Draw</span>
+        </div>
+        <div class="pile-slot">
+          <div class="pile discard-pile" id="discardPile"></div>
+          <span class="pile-label">Discard</span>
+        </div>
+      </div>
+
+      <div class="actions" id="actions">
+        <button class="btn-secondary" id="drawBtn">Draw</button>
+        <button class="btn-secondary" id="endTurnBtn">End Turn</button>
+        <button class="btn-uno hidden" id="unoBtn">UNO!</button>
+      </div>
+
+      <div class="hand-wrap">
+        <div class="hand" id="hand"></div>
+        <div class="ai-thinking hidden" id="aiThinking">
+          <span class="ai-dot"></span><span class="ai-dot"></span><span class="ai-dot"></span>
+          <span class="ai-text" id="aiThinkingText">AI is thinking…</span>
+        </div>
+      </div>
+
+      <div class="log-panel">
+        <div class="log-title">Game log</div>
+        <ol class="log" id="log"></ol>
+      </div>
+    </section>
+
+    <!-- ============ OVERLAYS ============ -->
+    <div class="overlay hidden" id="passOverlay">
+      <div class="overlay-card">
+        <div class="overlay-icon">⟳</div>
+        <h2 id="passTitle">Pass the device</h2>
+        <p class="overlay-sub" id="passSub">Hand the device to the next player.</p>
+        <button class="btn-primary" id="revealBtn">Show my cards</button>
+      </div>
+    </div>
+
+    <div class="overlay hidden" id="colorOverlay">
+      <div class="overlay-card">
+        <h2>Choose a colour</h2>
+        <p class="overlay-sub">The next card must match this colour.</p>
+        <div class="color-grid" id="colorGrid"></div>
+      </div>
+    </div>
+
+    <div class="overlay hidden" id="overOverlay">
+      <div class="overlay-card">
+        <div class="overlay-icon">★</div>
+        <h2 id="winnerTitle">Winner!</h2>
+        <p class="overlay-sub" id="winnerSub"></p>
+        <button class="btn-primary" id="restartBtn">Play again</button>
+        <button class="btn-secondary" id="newSetupBtn">New setup</button>
+      </div>
+    </div>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>
